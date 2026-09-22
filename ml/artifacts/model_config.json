@@ -1,0 +1,17 @@
+{
+  "window_size": 30,
+  "num_features": 4,
+  "features": [
+    "Battery_Temperature",
+    "Battery_Current",
+    "Battery_Voltage",
+    "Motor_RPM"
+  ],
+  "risk_classes": [
+    "LOW",
+    "MEDIUM",
+    "HIGH",
+    "CRITICAL"
+  ],
+  "selected_model": "lstm"
+}

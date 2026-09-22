@@ -1,0 +1,10 @@
+{
+  "features": [
+    "Battery_Temperature",
+    "Battery_Current",
+    "Battery_Voltage",
+    "Motor_RPM"
+  ],
+  "window_size": 30,
+  "horizon_steps": 1
+}

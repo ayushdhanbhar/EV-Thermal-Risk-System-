@@ -1,0 +1,32 @@
+{
+  "window_size": 30,
+  "horizon_steps": 1,
+  "features": [
+    "Battery_Temperature",
+    "Battery_Current",
+    "Battery_Voltage",
+    "Motor_RPM"
+  ],
+  "risk_levels": {
+    "LOW": {
+      "max_temperature_c": 34.0,
+      "max_delta_c": 1.5
+    },
+    "MEDIUM": {
+      "min_temperature_c": 34.0,
+      "max_temperature_c": 46.0,
+      "max_delta_c": 3.5
+    },
+    "HIGH": {
+      "min_temperature_c": 46.0,
+      "max_temperature_c": 55.0,
+      "max_delta_c": 6.0
+    },
+    "CRITICAL": {
+      "min_temperature_c": 55.0,
+      "min_delta_c": 4.0
+    }
+  },
+  "class_order": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+  "notes": "The project-specific thermal-risk label uses battery temperature and recent thermal trend only. It is intended to be configurable and does not rely on future fault or maintenance observations."
+}
