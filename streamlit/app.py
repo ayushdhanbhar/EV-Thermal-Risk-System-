@@ -1,80 +1,326 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
+import serial
+import serial.tools.list_ports
 import streamlit as st
 
+# ============================================================
+# PROJECT PATHS
+# ============================================================
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 ML_SRC_DIR = PROJECT_ROOT / "ml" / "src"
+
 if str(ML_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(ML_SRC_DIR))
 
+# ============================================================
+# IMPORTS
+# ============================================================
+
 from dashboard import render_dashboard
-from input_handler import load_test_sequence, read_manual_sequence, read_uploaded_sequence
+from input_handler import (
+    load_test_sequence,
+    read_manual_sequence,
+    read_uploaded_sequence,
+)
 from ml.src.inference import predict_risk
 
-st.set_page_config(page_title="EV Thermal Risk Advisory", layout="wide")
-st.title("EV Battery Thermal Risk Advisory System")
-st.caption("4 sensor channels × 30 time steps = 30×4 sequence for the LSTM/GRU model")
-st.markdown("This app expects the recent battery window as a time-series matrix: Temperature, Current, Voltage, and Motor RPM over the last 30 observations.")
+# ============================================================
+# PAGE
+# ============================================================
 
-source = st.radio("Choose input mode", ["Upload CSV", "Manual entry", "Use test dataset sequence"])
+st.set_page_config(
+    page_title="EV Battery Thermal Risk Advisory",
+    layout="wide",
+)
+
+st.title("EV Battery Thermal Risk Advisory System")
+
+st.caption("Live ESP32 → 30×4 Sequence → GRU Prediction")
+
+# ============================================================
+# BATTERY INFORMATION
+# ============================================================
+
+st.header("Battery Information")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    battery_max = st.number_input(
+        "Maximum Battery Voltage (V)",
+        value=420.0,
+        step=1.0,
+    )
+
+    battery_normal = st.number_input(
+        "Normal Battery Voltage (V)",
+        value=360.0,
+        step=1.0,
+    )
+
+with col2:
+    battery_min = st.number_input(
+        "Minimum Battery Voltage (V)",
+        value=300.0,
+        step=1.0,
+    )
+
+    battery_capacity = st.number_input(
+        "Battery Capacity (Ah)",
+        value=100.0,
+        step=1.0,
+    )
+
+st.divider()
+
+# ============================================================
+# INPUT MODE
+# ============================================================
+
+source = st.radio(
+    "Choose Input Mode",
+    (
+        "Upload CSV",
+        "Manual Entry",
+        "Use Test Dataset",
+        "Live ESP32",
+    ),
+)
+
 sequence = None
 
+# ============================================================
+# UPLOAD CSV
+# ============================================================
+
 if source == "Upload CSV":
-    uploaded_file = st.file_uploader("Upload a CSV with Battery_Temperature, Battery_Current, Battery_Voltage, Motor_RPM", type=["csv"])
-    if uploaded_file is not None:
+
+    uploaded = st.file_uploader(
+        "Upload CSV",
+        type=["csv"],
+    )
+
+    if uploaded is not None:
+
         try:
-            sequence = read_uploaded_sequence(uploaded_file)
-            st.success("30×4 sequence loaded successfully.")
-        except Exception as exc:
-            st.error(f"Upload error: {exc}")
-elif source == "Manual entry":
-    st.write("Enter the last 30 battery observations. Each row is one timestamp and has 4 sensor values.")
-    default_rows = [
+            sequence = read_uploaded_sequence(uploaded)
+            st.success("CSV loaded successfully.")
+
+        except Exception as e:
+            st.error(e)
+
+# ============================================================
+# MANUAL ENTRY
+# ============================================================
+
+elif source == "Manual Entry":
+
+    default = [
         {
-            "Battery_Temperature": 30.0 + i * 0.25,
-            "Battery_Current": -25.0 + i * 0.15,
-            "Battery_Voltage": 360.0 - i * 0.10,
-            "Motor_RPM": 1800 + i * 4,
+            "Battery_Temperature": 298 + i * 0.3,
+            "Battery_Current": 20 + i * 0.2,
+            "Battery_Voltage": battery_normal,
+            "Motor_RPM": 1500 + i * 5,
         }
         for i in range(30)
     ]
-    manual_df = st.data_editor(
-        pd.DataFrame(default_rows),
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "Battery_Temperature": st.column_config.NumberColumn("Temperature (°C)", min_value=-100.0, max_value=200.0, step=0.1),
-            "Battery_Current": st.column_config.NumberColumn("Current (A)", min_value=-500.0, max_value=500.0, step=0.1),
-            "Battery_Voltage": st.column_config.NumberColumn("Voltage (V)", min_value=0.0, max_value=500.0, step=0.1),
-            "Motor_RPM": st.column_config.NumberColumn("Motor RPM", min_value=0.0, max_value=20000.0, step=1.0),
-        },
-    )
-    if st.button("Predict thermal risk"):
-        try:
-            sequence = read_manual_sequence(manual_df.to_dict("records"))
-            st.success("30×4 time-series window assembled.")
-        except Exception as exc:
-            st.error(f"Manual entry error: {exc}")
-else:
-    if st.button("Load test sequence"):
-        try:
-            sequence = load_test_sequence()
-            st.success("Loaded historical 30×4 test window.")
-        except Exception as exc:
-            st.error(f"Sequence load error: {exc}")
 
-if sequence is not None:
+    df = st.data_editor(
+        pd.DataFrame(default),
+        use_container_width=True,
+    )
+
+    if st.button("Predict"):
+
+        sequence = read_manual_sequence(
+            df.to_dict("records")
+        )
+
+# ============================================================
+# TEST DATA
+# ============================================================
+
+elif source == "Use Test Dataset":
+
+    if st.button("Load Test Sequence"):
+
+        sequence = load_test_sequence()
+
+# ============================================================
+# LIVE ESP32
+# ============================================================
+
+elif source == "Live ESP32":
+
+    st.subheader("ESP32 Live Acquisition")
+
+    ports = serial.tools.list_ports.comports()
+    port_names = [p.device for p in ports]
+
+    if len(port_names) == 0:
+
+        st.warning("No ESP32 COM Port Detected")
+
+    else:
+
+        com = st.selectbox("Select COM Port", port_names)
+
+        st.info(f"ESP32 Connected : {com}")
+
+        st.write("Prototype Battery Voltage = 14.8 V")
+
+        if st.button("Start Live Prediction"):
+
+            progress = st.progress(0, text="Connecting ESP32...")
+
+            live_table = st.empty()
+
+            timer = st.empty()
+
+            samples = []
+
+            try:
+
+                ser = serial.Serial(
+                    com,
+                    115200,
+                    timeout=0.1,
+                )
+
+                time.sleep(1)
+
+                ser.reset_input_buffer()
+
+                start = time.time()
+
+                while len(samples) < 30:
+
+                    line = (
+                        ser.readline()
+                        .decode("utf-8", errors="ignore")
+                        .strip()
+                    )
+
+                    if not line.startswith("{"):
+                        continue
+
+                    try:
+                        data = json.loads(line)
+
+                    except:
+                        continue
+
+                    # -------------------------------------------------
+                    # CONVERSION
+                    # -------------------------------------------------
+
+                    prototype_voltage = float(data["voltage"])
+
+                    # Celsius → Kelvin
+                    temperature_kelvin = (
+                        float(data["temperature"]) + 273.15
+                    )
+
+                    # Prototype (14.8V) → User Battery
+                    mapped_voltage = (
+                        prototype_voltage / 14.8
+                    ) * battery_normal
+
+                    row = {
+                        "Battery_Temperature": temperature_kelvin,
+                        "Battery_Current": float(data["current"]),
+                        "Battery_Voltage": mapped_voltage,
+                        "Motor_RPM": float(data["rpm"]),
+                    }
+
+                    samples.append(row)
+
+                    df_live = pd.DataFrame(samples)
+
+                    live_table.dataframe(
+                        df_live,
+                        use_container_width=True,
+                        height=260,
+                    )
+
+                    progress.progress(
+                        len(samples) / 30,
+                        text=f"Collecting {len(samples)}/30 Samples",
+                    )
+
+                    timer.write(
+                        f"Elapsed : {time.time()-start:.1f} sec"
+                    )
+
+                ser.close()
+
+                progress.progress(
+                    1.0,
+                    text="30 Samples Collected Successfully",
+                )
+
+                sequence = read_manual_sequence(samples)
+
+                result = predict_risk(sequence)
+
+                st.session_state["probs_df"] = (
+                    pd.DataFrame(
+                        [
+                            {
+                                "Risk": k,
+                                "Probability": v,
+                            }
+                            for k, v in result[
+                                "probabilities"
+                            ].items()
+                        ]
+                    ).set_index("Risk")
+                )
+
+                st.success("GRU Prediction Completed")
+
+                render_dashboard(sequence, result)
+
+            except Exception as e:
+
+                st.error(f"ESP32 Error : {e}")
+
+# ============================================================
+# NORMAL PREDICTION
+# ============================================================
+
+if sequence is not None and source != "Live ESP32":
+
     try:
+
         result = predict_risk(sequence)
-        st.session_state["probs_df"] = pd.DataFrame(
-            [{"Risk": k, "Probability": v} for k, v in result["probabilities"].items()]
-        ).set_index("Risk")
+
+        st.session_state["probs_df"] = (
+            pd.DataFrame(
+                [
+                    {
+                        "Risk": k,
+                        "Probability": v,
+                    }
+                    for k, v in result[
+                        "probabilities"
+                    ].items()
+                ]
+            ).set_index("Risk")
+        )
+
         render_dashboard(sequence, result)
-    except Exception as exc:
-        st.error(f"Prediction failed: {exc}")
+
+    except Exception as e:
+
+        st.error(f"Prediction Error : {e}")

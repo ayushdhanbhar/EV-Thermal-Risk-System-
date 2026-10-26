@@ -19,7 +19,7 @@ def render_dashboard(sequence, prediction):
 
     st.subheader("Thermal Risk")
     st.markdown(f"### {prediction['risk_level']}")
-    st.metric("Risk Probability", f"{prediction['risk_probability'] * 100:.2f}%")
+    st.metric("Risk Probability", f"{prediction['risk_probability'] * 10:.2f}%")
     st.info(f"Advisory: {prediction['advisory']}")
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
